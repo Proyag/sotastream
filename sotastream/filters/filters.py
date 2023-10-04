@@ -42,6 +42,20 @@ def BitextFilter(lines, end_range=2):
         yield line
 
 
+def FieldFilter(lines, fields=[]):
+    """
+    Removes all fields except the ones specified in fields.
+    Keeps all fields if fields is an empty list.
+
+    :param lines: the stream of input lines
+    :param fields: the list of fields to keep
+    """
+    for line in lines:
+        if len(fields) > 0:
+            line.fields = [line.fields[i] for i in fields if i < len(line)]
+        yield line
+
+
 def MatchFilter(lines, pattern=r'[\=\+\#\@\^\~\<\>]', fields=[0, 1], invert=False):
     for line in lines:
         if len(line) < 2:
