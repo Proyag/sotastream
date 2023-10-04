@@ -3,7 +3,7 @@ from functools import partial
 from typing import List
 from urllib.parse import urlparse
 
-from sotastream.augmentors import UTF8File
+from sotastream.augmentors import UTF8File, Mixer
 from sotastream.filters import FieldFilter
 
 from . import Pipeline, pipeline
@@ -14,7 +14,7 @@ class SampleFromFieldsPipeline(Pipeline):
     def __init__(self, parallel_data, **kwargs):
         super().__init__(**kwargs)
 
-        self.stream = self.create_data_stream(
+        stream = self.create_data_stream(
             parallel_data,
             processor=partial(
                 ReadAndSample,
@@ -24,12 +24,10 @@ class SampleFromFieldsPipeline(Pipeline):
                 keep_last_n_tokens=kwargs.get('keep_last_n_tokens', -1),
             ),
         )
-        # PPTODO: Add separate sources for document and sentence data, with Mixer
-        self.stream = FieldFilter(self.stream, fields=kwargs.get('keep_fields', []))
+        self.stream = FieldFilter(stream, fields=kwargs.get('keep_fields', []))
 
     @classmethod
     def get_data_sources_for_argparse(cls):
-        # PPTODO: Add separate sources for document and sentence data
         return [('parallel_data', 'Path to parallel data (folder with .gz files, or compressed TSV)')]
 
     @classmethod
@@ -128,11 +126,82 @@ def ReadAndSample(
     keep_last_n_tokens: int = -1,
 ):
     """
-    Opens a file as a stream and passes it through SampleFromCommaSeparatedList.
+    Opens a file as a stream and passes it through augmentors.
     """
     stream = UTF8File(path)
     stream = SampleFromFields(stream, sample_fields=sample_fields, delimiter=delimiter)
     stream = GetURLDomain(stream, url_field=url_domains)
     stream = KeepLastNTokens(stream, field=keep_last_n_tokens, max_n=512)
+
+    return stream
+
+
+@pipeline('sample_from_fields_mixed')
+class SampleFromFieldsMixedPipeline(SampleFromFieldsPipeline):
+    def __init__(self, document_data, sentence_data, **kwargs):
+        super().__init__(document_data, **kwargs)
+
+        sentence_stream = self.create_data_stream(
+            sentence_data,
+            processor=partial(
+                SentencesWithPlaceholders,
+                placeholder=kwargs.get('placeholder', ''),
+                placeholder_fields=kwargs.get('placeholder_fields', []),
+            ),
+        )
+        self.stream = Mixer([self.stream, sentence_stream], self.mix_weights)
+
+    @classmethod
+    def get_data_sources_for_argparse(cls):
+        return [
+            ('document_data', 'Path to document data (folder with .gz files, or compressed TSV)'),
+            ('sentence_data', 'Path to sentence data (folder with .gz files, or compressed TSV)'),
+        ]
+
+    @classmethod
+    def get_data_sources_default_weights(cls):
+        return [0.5, 0.5]
+
+    @classmethod
+    def add_cli_args(cls, parser):
+        """
+        Add pipeline-specific arguments.
+        """
+        super().add_cli_args(parser)
+
+        parser.add_argument(
+            "--placeholder",
+            type=str,
+            default="",
+            help="Placeholder text to fill for data with no document field",
+        )
+        parser.add_argument(
+            "--placeholder-fields",
+            type=int,
+            nargs='*',
+            default=[],
+            help="Which fields to fill with the placeholder text (0-indexed). No placeholders if empty.",
+        )
+
+
+def AddPlaceholderFields(stream, placeholder: str = "", placeholder_fields: List[int] = []):
+    """
+    Adds placeholder fields to lines with no document field.
+    """
+    for line in stream:
+        if len(placeholder_fields) > 0:
+            for placeholder_field in sorted(placeholder_fields):
+                if placeholder_field > len(line):
+                    continue
+                line.fields.insert(placeholder_field, placeholder)
+        yield line
+
+
+def SentencesWithPlaceholders(path: str, placeholder: str = "", placeholder_fields: List[int] = []):
+    """
+    Opens files as streams and passes it through AddPlaceholderFields.
+    """
+    stream = UTF8File(path)
+    stream = AddPlaceholderFields(stream, placeholder=placeholder, placeholder_fields=placeholder_fields)
 
     return stream
