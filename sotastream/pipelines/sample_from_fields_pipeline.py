@@ -21,7 +21,9 @@ class SampleFromFieldsPipeline(Pipeline):
                 url_domains=kwargs.get('url_domains', -1),
                 sample_fields=kwargs.get('sample_fields', [1]),
                 delimiter=kwargs.get('delimiter', ','),
-                keep_last_n_tokens=kwargs.get('keep_last_n_tokens', -1),
+                keep_last_n_tokens=kwargs.get('keep_last_n_tokens', []),
+                max_n=kwargs.get('max_last_n', 512),
+                doc_sep=kwargs.get('separator', '<docline>'),
             ),
         )
         self.stream = FieldFilter(stream, fields=kwargs.get('keep_fields', []))
@@ -64,8 +66,15 @@ class SampleFromFieldsPipeline(Pipeline):
         parser.add_argument(
             "--keep-last-n-tokens",
             type=int,
-            default=-1,
+            nargs='*',
+            default=[],
             help="Which field (0-indexed) to keep only the last N tokens of, where N is sampled from [1, max_n]. -1 to disable. max_n is currently hardcoded to 512.",
+        )
+        parser.add_argument(
+            "--max-last-n",
+            type=int,
+            default=512,
+            help="Maximum number of tokens to keep for keep-last-n-tokens",
         )
         parser.add_argument("--delimiter", type=str, default=',', help="Delimiter to split list on")
 
@@ -104,17 +113,25 @@ def GetURLDomain(stream, url_field: int = -1):
             yield line
 
 
-def KeepLastNTokens(stream, field: int = -1, max_n: int = 512):
+def KeepLastNTokens(stream, fields: List[int] = [], max_n: int = 512, doc_sep: str = '<docline>'):
     """
     Sample N from [1, max_n], and keep the last N tokens of the field.
     """
-    # PPTODO: Be smarter to not split sentences
     for line in stream:
-        if field == -1 or field >= len(line):
+        if fields == []:
             yield line
-        else:
-            n = random.randint(1, max_n)
-            line[field] = ' '.join(line[field].split()[-n:])
+        for field in fields:
+            if field >= len(line):
+                continue
+            else:
+                n = random.randint(1, max_n)
+                if doc_sep == ' ':
+                    line[field] = ' '.join(line[field].split()[-n:])
+                else:
+                    line_split = line[field].split(doc_sep)
+                    line[field] = line_split.pop().strip(' ')
+                    while len(line[field].split()) < n and len(line_split) > 0:
+                        line[field] = line_split.pop().strip(' ') + ' ' + doc_sep + ' ' + line[field]
         yield line
 
 
@@ -123,7 +140,9 @@ def ReadAndSample(
     url_domains: int = -1,
     sample_fields: List[int] = [1],
     delimiter: str = ',',
-    keep_last_n_tokens: int = -1,
+    keep_last_n_tokens: List[int] = [],
+    max_n: int = 512,
+    doc_sep: str = '<docline>',
 ):
     """
     Opens a file as a stream and passes it through augmentors.
@@ -131,7 +150,7 @@ def ReadAndSample(
     stream = UTF8File(path)
     stream = SampleFromFields(stream, sample_fields=sample_fields, delimiter=delimiter)
     stream = GetURLDomain(stream, url_field=url_domains)
-    stream = KeepLastNTokens(stream, field=keep_last_n_tokens, max_n=512)
+    stream = KeepLastNTokens(stream, fields=keep_last_n_tokens, max_n=max_n, doc_sep=doc_sep)
 
     return stream
 
