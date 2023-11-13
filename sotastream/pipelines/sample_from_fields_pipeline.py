@@ -26,6 +26,7 @@ class SampleFromFieldsPipeline(Pipeline):
                 doc_sep=kwargs.get('separator', '<docline>'),
             ),
         )
+        # BUG: FieldFilter here is somehow broken, produces lines with fewer fields
         self.stream = FieldFilter(stream, fields=kwargs.get('keep_fields', []))
 
     @classmethod
@@ -85,7 +86,7 @@ def SampleFromFields(stream, sample_fields: List[int] = [1], delimiter: str = ',
     """
     for line in stream:
         for sample_field in sample_fields:
-            if sample_field >= len(line):
+            if sample_field >= len(line) or sample_field < 0:
                 continue
 
             line[sample_field] = random.choice(line[sample_field].split(delimiter))
